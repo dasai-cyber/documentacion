@@ -10,7 +10,8 @@ import {
   FileText,
   CheckSquare,
   Square,
-  Download,
+  RotateCw,
+  RotateCcw,
   Loader2,
   Sparkles,
   Check,
@@ -19,6 +20,7 @@ import {
 export const ImageGalleryPdf: React.FC = () => {
   const { queue } = useFileStore();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [rotations, setRotations] = useState<Record<string, number>>({});
   const [pageSize, setPageSize] = useState<'a4' | 'fitImage'>('a4');
   const [isGenerating, setIsGenerating] = useState(false);
   const [pdfProgress, setPdfProgress] = useState<{ current: number; total: number } | null>(null);
@@ -33,14 +35,12 @@ export const ImageGalleryPdf: React.FC = () => {
   useEffect(() => {
     setSelectedIds((prev) => {
       const updated = new Set(prev);
-      // Retain only IDs that still exist in imageItems
       const currentIds = new Set(imageItems.map((i) => i.id));
       for (const id of Array.from(updated)) {
         if (!currentIds.has(id)) {
           updated.delete(id);
         }
       }
-      // Add any new image IDs by default
       for (const item of imageItems) {
         if (!prev.has(item.id)) {
           updated.add(item.id);
@@ -77,6 +77,28 @@ export const ImageGalleryPdf: React.FC = () => {
     }
   };
 
+  const handleRotate = (id: string, deltaDegrees: number, e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+    }
+    setRotations((prev) => {
+      const current = prev[id] || 0;
+      const nextAngle = (current + deltaDegrees + 360) % 360;
+      return { ...prev, [id]: nextAngle };
+    });
+  };
+
+  const handleRotateSelected = (deltaDegrees: number) => {
+    setRotations((prev) => {
+      const updated = { ...prev };
+      for (const id of Array.from(selectedIds)) {
+        const current = updated[id] || 0;
+        updated[id] = (current + deltaDegrees + 360) % 360;
+      }
+      return updated;
+    });
+  };
+
   const handleGeneratePdf = async () => {
     if (selectedItems.length === 0 || isGenerating) return;
 
@@ -86,6 +108,7 @@ export const ImageGalleryPdf: React.FC = () => {
     try {
       await generatePdfFromImages(selectedItems, {
         pageSize,
+        rotations,
         filename: `album-imagenes-${new Date().toISOString().slice(0, 10)}.pdf`,
         onProgress: (current, total) => {
           setPdfProgress({ current, total });
@@ -110,11 +133,22 @@ export const ImageGalleryPdf: React.FC = () => {
             <span>Galería de imágenes & Exportar a PDF</span>
           </div>
           <p className="text-xs text-slate-500">
-            Selecciona las imágenes que deseas compilar en un único archivo PDF
+            Gira las fotos que estén al revés y selecciona las que deseas compilar en PDF
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {selectedItems.length > 0 && (
+            <button
+              onClick={() => handleRotateSelected(90)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200/60 transition-colors cursor-pointer"
+              title="Girar todas las imágenes seleccionadas 90° a la derecha"
+            >
+              <RotateCw className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Girar seleccionadas 90°</span>
+            </button>
+          )}
+
           <button
             onClick={handleSelectAll}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
@@ -141,7 +175,9 @@ export const ImageGalleryPdf: React.FC = () => {
             key={item.id}
             item={item}
             isSelected={selectedIds.has(item.id)}
+            rotation={rotations[item.id] || 0}
             onToggle={() => toggleSelect(item.id)}
+            onRotate={(delta, e) => handleRotate(item.id, delta, e)}
           />
         ))}
       </div>
@@ -193,10 +229,18 @@ export const ImageGalleryPdf: React.FC = () => {
 interface ImageCardProps {
   item: QueueItem;
   isSelected: boolean;
+  rotation: number;
   onToggle: () => void;
+  onRotate: (delta: number, e: React.MouseEvent) => void;
 }
 
-const ImageCard: React.FC<ImageCardProps> = ({ item, isSelected, onToggle }) => {
+const ImageCard: React.FC<ImageCardProps> = ({
+  item,
+  isSelected,
+  rotation,
+  onToggle,
+  onRotate,
+}) => {
   const [previewUrl, setPreviewUrl] = useState<string>('');
 
   useEffect(() => {
@@ -218,13 +262,16 @@ const ImageCard: React.FC<ImageCardProps> = ({ item, isSelected, onToggle }) => 
           : 'border-slate-200 hover:border-slate-300 opacity-85 hover:opacity-100'
       }`}
     >
-      {/* Thumbnail Aspect Ratio Container */}
+      {/* Thumbnail Container */}
       <div className="relative w-full aspect-4/3 bg-slate-200 overflow-hidden flex items-center justify-center">
         {previewUrl ? (
           <img
             src={previewUrl}
             alt={item.name}
-            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+            style={{
+              transform: `rotate(${rotation}deg)`,
+            }}
+            className="w-full h-full object-contain transition-transform duration-300 ease-in-out p-1"
           />
         ) : (
           <div className="w-6 h-6 border-2 border-slate-400 border-t-transparent rounded-full animate-spin" />
@@ -243,6 +290,33 @@ const ImageCard: React.FC<ImageCardProps> = ({ item, isSelected, onToggle }) => 
           </div>
         </div>
 
+        {/* Rotation Controls Overlay */}
+        <div className="absolute top-2 left-2 flex items-center gap-1">
+          <button
+            type="button"
+            onClick={(e) => onRotate(90, e)}
+            className="p-1.5 rounded-lg bg-white/90 hover:bg-white text-slate-700 shadow-sm hover:text-emerald-700 hover:scale-110 transition-all cursor-pointer"
+            title="Girar 90° a la derecha"
+          >
+            <RotateCw className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => onRotate(-90, e)}
+            className="p-1.5 rounded-lg bg-white/90 hover:bg-white text-slate-700 shadow-sm hover:text-emerald-700 hover:scale-110 transition-all cursor-pointer"
+            title="Girar 90° a la izquierda"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {/* Rotation indicator badge */}
+        {rotation !== 0 && (
+          <div className="absolute bottom-2 right-2 bg-slate-900/80 backdrop-blur-xs text-white text-[10px] font-bold px-1.5 py-0.5 rounded-md flex items-center gap-0.5">
+            <span>{rotation}°</span>
+          </div>
+        )}
+
         {/* Savings Badge */}
         {item.savedPercent !== null && item.savedPercent > 0 && (
           <div className="absolute bottom-2 left-2 bg-emerald-900/80 backdrop-blur-xs text-white text-[10px] font-extrabold px-1.5 py-0.5 rounded-md flex items-center gap-0.5">
@@ -259,8 +333,8 @@ const ImageCard: React.FC<ImageCardProps> = ({ item, isSelected, onToggle }) => 
         </p>
         <div className="flex items-center justify-between text-[11px] text-slate-500 font-medium">
           <span>{formatBytes(item.compressedSize || item.originalSize)}</span>
-          {item.status === 'compressing' && (
-            <span className="text-emerald-600 font-bold">Comprimiendo...</span>
+          {rotation !== 0 && (
+            <span className="text-emerald-600 font-bold">Girada {rotation}°</span>
           )}
         </div>
       </div>

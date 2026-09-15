@@ -3,9 +3,13 @@ import { QueueItem } from '@/types';
 
 /**
  * Loads an image from a Blob/File and converts it to a JPEG byte array
- * using an HTML5 Canvas, ensuring compatibility with pdf-lib.
+ * using an HTML5 Canvas, applying rotation (0, 90, 180, 270 deg)
+ * and ensuring compatibility with pdf-lib.
  */
-async function convertBlobToJpgBytes(blob: Blob): Promise<{ bytes: Uint8Array; width: number; height: number }> {
+async function convertBlobToJpgBytes(
+  blob: Blob,
+  rotation: number = 0
+): Promise<{ bytes: Uint8Array; width: number; height: number }> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(blob);
     const img = new Image();
@@ -13,8 +17,19 @@ async function convertBlobToJpgBytes(blob: Blob): Promise<{ bytes: Uint8Array; w
     img.onload = () => {
       try {
         const canvas = document.createElement('canvas');
-        canvas.width = img.naturalWidth;
-        canvas.height = img.naturalHeight;
+        const normalizedRotation = ((rotation % 360) + 360) % 360;
+        const rad = (normalizedRotation * Math.PI) / 180;
+
+        const origW = img.naturalWidth;
+        const origH = img.naturalHeight;
+
+        if (normalizedRotation === 90 || normalizedRotation === 270) {
+          canvas.width = origH;
+          canvas.height = origW;
+        } else {
+          canvas.width = origW;
+          canvas.height = origH;
+        }
 
         const ctx = canvas.getContext('2d');
         if (!ctx) {
@@ -22,10 +37,25 @@ async function convertBlobToJpgBytes(blob: Blob): Promise<{ bytes: Uint8Array; w
           return reject(new Error('No se pudo inicializar el contexto 2D de canvas'));
         }
 
-        // Fill background with white in case image has alpha transparency
+        // Fill background with white
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0);
+
+        // Apply rotation transformations
+        ctx.save();
+        if (normalizedRotation === 90) {
+          ctx.translate(canvas.width, 0);
+          ctx.rotate(rad);
+        } else if (normalizedRotation === 180) {
+          ctx.translate(canvas.width, canvas.height);
+          ctx.rotate(rad);
+        } else if (normalizedRotation === 270) {
+          ctx.translate(0, canvas.height);
+          ctx.rotate(rad);
+        }
+
+        ctx.drawImage(img, 0, 0, origW, origH);
+        ctx.restore();
 
         canvas.toBlob(
           async (jpegBlob) => {
@@ -36,8 +66,8 @@ async function convertBlobToJpgBytes(blob: Blob): Promise<{ bytes: Uint8Array; w
             const arrayBuffer = await jpegBlob.arrayBuffer();
             resolve({
               bytes: new Uint8Array(arrayBuffer),
-              width: img.naturalWidth,
-              height: img.naturalHeight,
+              width: canvas.width,
+              height: canvas.height,
             });
           },
           'image/jpeg',
@@ -61,6 +91,7 @@ async function convertBlobToJpgBytes(blob: Blob): Promise<{ bytes: Uint8Array; w
 export interface GeneratePdfOptions {
   pageSize?: 'a4' | 'fitImage';
   filename?: string;
+  rotations?: Record<string, number>; // id -> degrees (0, 90, 180, 270)
   onProgress?: (current: number, total: number) => void;
 }
 
@@ -72,7 +103,7 @@ export async function generatePdfFromImages(
     throw new Error('No hay imágenes seleccionadas para generar el PDF');
   }
 
-  const { pageSize = 'a4', onProgress } = options;
+  const { pageSize = 'a4', rotations = {}, onProgress } = options;
   const pdfDoc = await PDFDocument.create();
 
   // A4 dimensions in points (72 points = 1 inch)
@@ -87,12 +118,13 @@ export async function generatePdfFromImages(
     }
 
     const sourceBlob = item.resultBlob || item.file;
-    const { bytes, width: imgWidth, height: imgHeight } = await convertBlobToJpgBytes(sourceBlob);
+    const rotation = rotations[item.id] || 0;
+    const { bytes, width: imgWidth, height: imgHeight } = await convertBlobToJpgBytes(sourceBlob, rotation);
 
     const embeddedImage = await pdfDoc.embedJpg(bytes);
 
     if (pageSize === 'fitImage') {
-      // Create page exact size of image
+      // Create page exact size of the (possibly rotated) image
       const page = pdfDoc.addPage([imgWidth, imgHeight]);
       page.drawImage(embeddedImage, {
         x: 0,
@@ -101,7 +133,7 @@ export async function generatePdfFromImages(
         height: imgHeight,
       });
     } else {
-      // A4 page with auto-orientation (portrait or landscape)
+      // A4 page with auto-orientation based on rotated dimensions
       const isLandscape = imgWidth > imgHeight;
       const pageWidth = isLandscape ? A4_HEIGHT : A4_WIDTH;
       const pageHeight = isLandscape ? A4_WIDTH : A4_HEIGHT;
@@ -137,7 +169,7 @@ export async function generatePdfFromImages(
   const pdfBlob = new Blob([pdfBytes.buffer as ArrayBuffer], { type: 'application/pdf' });
 
   // Trigger download in browser
-  const defaultName = `imagenes-comprimelo-${new Date().toISOString().slice(0, 10)}.pdf`;
+  const defaultName = `album-imagenes-${new Date().toISOString().slice(0, 10)}.pdf`;
   const filename = options.filename || defaultName;
 
   const url = URL.createObjectURL(pdfBlob);
